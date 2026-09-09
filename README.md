@@ -500,3 +500,5 @@ GPL3 License - see [COPYING](COPYING) file for details.
 - Inspired by [Sonarr](https://sonarr.tv/) and [GamezServer](https://github.com/05sonicblue/GamezServer)
 - Game metadata powered by [IGDB API](https://www.igdb.com/)
 - UI components from [shadcn/ui](https://ui.shadcn.com/)
+
+# Test
