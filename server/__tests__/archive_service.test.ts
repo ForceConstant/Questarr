@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -217,5 +218,132 @@ describe("ArchiveService", () => {
     expect(files[0]).toMatch(/tmp[\\/]nested-out[\\/]level1[\\/]level2[\\/]deep\.rom$/);
     expect(files[1]).toMatch(/tmp[\\/]nested-out[\\/]level1[\\/]level2[\\/]level3[\\/]extra\.bin$/);
     expect(files[2]).toMatch(/tmp[\\/]nested-out[\\/]root\.cfg$/);
+  });
+});
+
+describe("ArchiveService progress and configurable timeout", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("calls onProgress callback with file events during extraction", async () => {
+    const stream = new EventEmitter();
+    extractFullMock.mockReturnValue(stream);
+
+    const progressEvents: Array<{ type: string; file?: string }> = [];
+    const service = new ArchiveService();
+    const resultPromise = service.extract("/downloads/game.rar", "/tmp/out", {
+      onProgress: (event) => progressEvents.push(event),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    stream.emit("data", { status: "extracted", file: "game.rom" });
+    stream.emit("data", { status: "extracted", file: "sub/fanart.png" });
+    stream.emit("end");
+
+    await resultPromise;
+
+    expect(progressEvents).toEqual([
+      { type: "file", file: "game.rom" },
+      { type: "file", file: "sub/fanart.png" },
+    ]);
+  });
+
+  it("calls onProgress callback with progress percentage events", async () => {
+    const stream = new EventEmitter();
+    extractFullMock.mockReturnValue(stream);
+
+    const progressEvents: Array<{ type: string; percent?: number; file?: string }> = [];
+    const service = new ArchiveService();
+    const resultPromise = service.extract("/downloads/game.rar", "/tmp/out", {
+      onProgress: (event) => progressEvents.push(event),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // node-7z emits progress events when -bsp1 flag is active
+    stream.emit("data", { status: "progress", percent: 23, file: "game.rom" });
+    stream.emit("data", { status: "progress", percent: 50, file: "game.rom" });
+    stream.emit("data", { status: "progress", percent: 100, file: "game.rom" });
+    stream.emit("data", { status: "extracted", file: "game.rom" });
+    stream.emit("end");
+
+    await resultPromise;
+
+    expect(progressEvents).toEqual([
+      { type: "progress", percent: 23, file: "game.rom" },
+      { type: "progress", percent: 50, file: "game.rom" },
+      { type: "progress", percent: 100, file: "game.rom" },
+      { type: "file", file: "game.rom" },
+    ]);
+  });
+
+  it("does not call onProgress for non-progress/non-file events", async () => {
+    const stream = new EventEmitter();
+    extractFullMock.mockReturnValue(stream);
+
+    const progressEvents: Array<{ type: string }> = [];
+    const service = new ArchiveService();
+    const resultPromise = service.extract("/downloads/game.rar", "/tmp/out", {
+      onProgress: (event) => progressEvents.push(event),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    stream.emit("data", { status: "processing", file: "something.txt" });
+    stream.emit("data", { status: "ignored", file: "skip.me" });
+    stream.emit("data", { status: "extracted", file: "game.rom" });
+    stream.emit("end");
+
+    await resultPromise;
+
+    expect(progressEvents).toEqual([{ type: "file", file: "game.rom" }]);
+  });
+
+  it("works without onProgress callback (backward compatible)", async () => {
+    const stream = new EventEmitter();
+    extractFullMock.mockReturnValue(stream);
+
+    const service = new ArchiveService();
+    const resultPromise = service.extract("/downloads/game.rar", "/tmp/out");
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    stream.emit("data", { status: "extracted", file: "game.rom" });
+    stream.emit("end");
+
+    const files = await resultPromise;
+    expect(files).toHaveLength(1);
+  });
+
+  it("uses default 10-minute timeout when no timeoutMs specified", async () => {
+    const stream = new EventEmitter();
+    extractFullMock.mockReturnValue(stream);
+
+    const service = new ArchiveService();
+    const resultPromise = service.extract("/downloads/large.rar", "/tmp/out");
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Simulate progress over time — extraction is still making progress
+    stream.emit("data", { status: "progress", percent: 10, file: "large.bin" });
+    stream.emit("data", { status: "progress", percent: 50, file: "large.bin" });
+    stream.emit("data", { status: "progress", percent: 90, file: "large.bin" });
+    stream.emit("data", { status: "extracted", file: "large.bin" });
+    stream.emit("end");
+
+    const files = await resultPromise;
+    expect(files).toHaveLength(1);
+  });
+
+  it("accepts custom timeoutMs", async () => {
+    const stream = new EventEmitter();
+    extractFullMock.mockReturnValue(stream);
+
+    const service = new ArchiveService();
+    expect(() => {
+      service.extract("/downloads/game.rar", "/tmp/out", { timeoutMs: 300000 });
+    }).not.toThrow();
   });
 });
